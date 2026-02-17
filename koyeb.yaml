@@ -1,0 +1,20 @@
+services:
+  - name: vocab-telegram-bot
+    type: worker
+    git:
+      repository: github.com/YOUR_GITHUB_USERNAME/vocab-telegram-bot
+      branch: main
+    build:
+      buildpack:
+        build-command: pip install -r requirements.txt
+    run:
+      command: python vocab_bot.py
+    env:
+      - name: TELEGRAM_BOT_TOKEN
+        value: YOUR_TELEGRAM_BOT_TOKEN
+      - name: GEMINI_API_KEY
+        value: YOUR_GEMINI_API_KEY
+    instance_types:
+      - nano  # Free tier instance
+    regions:
+      - was   # Washington DC (free region)
