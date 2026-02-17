@@ -15,7 +15,7 @@ from flask import Flask
 #  CONFIGURATION  (replace your keys here)
 # ─────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8429363146:AAGxxiMGwnjfFS3EdOA9cn9p-ic35R9fhAM')
-GEMINI_API_KEY     = os.getenv('GEMINI_API_KEY',     'AIzaSyDm-YyDAnsdpgmYN-3x6IZE8YqUsFqlVWM')
+GEMINI_API_KEY     = os.getenv('GEMINI_API_KEY',     '')
 PORT               = int(os.getenv('PORT', 8000))  # Koyeb uses PORT env variable
 
 CHAT_ID_FILE = 'user_chat_id.txt'
