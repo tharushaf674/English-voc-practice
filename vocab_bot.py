@@ -14,11 +14,11 @@ from flask import Flask
 # ─────────────────────────────────────────
 #  CONFIGURATION  (replace your keys here)
 # ─────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8429363146:AAGxxiMGwnjfFS3EdOA9cn9p-ic35R9fhAM')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 GEMINI_API_KEY     = os.getenv('GEMINI_API_KEY',     '')
 PORT               = int(os.getenv('PORT', 8000))  # Koyeb uses PORT env variable
 
-CHAT_ID_FILE = 'user_chat_id.txt'
+CHAT_ID_FILE = '1956037087.txt'
 WORDS_FILE   = 'english_words.json'
 
 # Gemini client
@@ -33,16 +33,42 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    words = load_words()
-    return f"✅ Vocab Bot is running! Words saved: {len(words)}"
+    try:
+        words = load_words()
+        count = len(words)
+    except:
+        count = 0
+    return f"✅ Vocab Bot is running! Words saved: {count}", 200
 
 @flask_app.route('/health')
 def health():
     return "OK", 200
 
+@flask_app.route('/ping')
+def ping():
+    return "pong", 200
+
 print("✅ Vocab Bot started")
 print(f"✅ Model  : {GEMINI_MODEL}")
 print("✅ Mode   : Web Service (Koyeb free tier compatible)")
+
+
+# ─────────────────────────────────────────
+#  SELF-PING: prevents Koyeb from sleeping
+# ─────────────────────────────────────────
+def self_ping():
+    """Ping our own server every 5 minutes to stay awake"""
+    import requests as req
+    koyeb_url = os.getenv('KOYEB_URL', '')
+
+    while True:
+        time.sleep(300)  # every 5 minutes
+        if koyeb_url:
+            try:
+                req.get(f"{koyeb_url}/ping", timeout=10)
+                print("✅ Self-ping sent - staying awake!")
+            except Exception as e:
+                print(f"⚠️ Self-ping failed: {e}")
 
 
 # ─────────────────────────────────────────
@@ -365,7 +391,7 @@ def schedule_daily_practice(application):
     async def job():
         await send_daily_practice(application)
 
-    schedule.every().day.at("09:00").do(lambda: asyncio.create_task(job()))
+    schedule.every().day.at("06:00").do(lambda: asyncio.create_task(job()))
 
     while True:
         schedule.run_pending()
@@ -375,34 +401,44 @@ def schedule_daily_practice(application):
 # ─────────────────────────────────────────
 #  MAIN
 # ─────────────────────────────────────────
-def run_flask():
-    """Run Flask web server - required for Koyeb Web Service"""
-    flask_app.run(host='0.0.0.0', port=PORT)
+def run_bot():
+    """Run Telegram bot in background thread"""
+    async def start_bot():
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+        application.add_handler(CommandHandler("start",    start))
+        application.add_handler(CommandHandler("list",     list_words))
+        application.add_handler(CommandHandler("practice", practice_all))
+        application.add_handler(CommandHandler("remove",   remove_word))
+        application.add_handler(CommandHandler("stats",    stats))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_word))
+
+        # Run scheduler in background thread
+        scheduler_thread = Thread(
+            target=schedule_daily_practice,
+            args=(application,),
+            daemon=True
+        )
+        scheduler_thread.start()
+
+        print("🤖 Bot is running...")
+        await application.run_polling()
+
+    asyncio.run(start_bot())
+
 
 def main():
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Start Telegram bot in background thread
+    bot_thread = Thread(target=run_bot, daemon=True)
+    bot_thread.start()
 
-    application.add_handler(CommandHandler("start",    start))
-    application.add_handler(CommandHandler("list",     list_words))
-    application.add_handler(CommandHandler("practice", practice_all))
-    application.add_handler(CommandHandler("remove",   remove_word))
-    application.add_handler(CommandHandler("stats",    stats))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_word))
+    # Start self-ping thread to prevent sleeping
+    ping_thread = Thread(target=self_ping, daemon=True)
+    ping_thread.start()
 
-    # Run Flask in background thread (keeps Koyeb web service alive)
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
-    # Run scheduler in background thread
-    scheduler_thread = Thread(
-        target=schedule_daily_practice,
-        args=(application,),
-        daemon=True
-    )
-    scheduler_thread.start()
-
-    print("🤖 Bot is running...")
-    application.run_polling()
+    # Flask runs in main thread - Koyeb health checks pass immediately!
+    print(f"🌐 Starting web server on port {PORT}...")
+    flask_app.run(host='0.0.0.0', port=PORT)
 
 
 if __name__ == '__main__':
