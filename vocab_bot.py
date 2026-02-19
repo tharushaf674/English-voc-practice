@@ -14,11 +14,11 @@ from flask import Flask
 # ─────────────────────────────────────────
 #  CONFIGURATION  (replace your keys here)
 # ─────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-GEMINI_API_KEY     = os.getenv('GEMINI_API_KEY',     '')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN')
+GEMINI_API_KEY     = os.getenv('GEMINI_API_KEY',     'YOUR_GEMINI_API_KEY')
 PORT               = int(os.getenv('PORT', 8000))  # Koyeb uses PORT env variable
 
-CHAT_ID_FILE = '1956037087.txt'
+CHAT_ID_FILE = 'user_chat_id.txt'
 WORDS_FILE   = 'english_words.json'
 
 # Gemini client
@@ -36,9 +36,9 @@ def home():
     try:
         words = load_words()
         count = len(words)
-    except:
+    except Exception:
         count = 0
-    return f"✅ Vocab Bot is running! Words saved: {count}", 200
+    return f"✅ Vocab Bot is running! Words: {count}", 200
 
 @flask_app.route('/health')
 def health():
@@ -59,7 +59,11 @@ print("✅ Mode   : Web Service (Koyeb free tier compatible)")
 def self_ping():
     """Ping our own server every 5 minutes to stay awake"""
     import requests as req
-    koyeb_url = os.getenv('KOYEB_URL', '')
+    koyeb_url = os.getenv('KOYEB_URL', '').strip().rstrip('/')
+
+    # Make sure URL has https://
+    if koyeb_url and not koyeb_url.startswith('http'):
+        koyeb_url = 'https://' + koyeb_url
 
     while True:
         time.sleep(300)  # every 5 minutes
@@ -387,11 +391,14 @@ async def send_daily_practice(application):
         print(f"❌ Daily practice error: {e}")
 
 
-def schedule_daily_practice(application):
+def schedule_daily_practice(application, loop):
     async def job():
         await send_daily_practice(application)
 
-    schedule.every().day.at("06:00").do(lambda: asyncio.create_task(job()))
+    def run_job():
+        asyncio.run_coroutine_threadsafe(job(), loop)
+
+    schedule.every().day.at("09:00").do(run_job)
 
     while True:
         schedule.run_pending()
@@ -402,43 +409,67 @@ def schedule_daily_practice(application):
 #  MAIN
 # ─────────────────────────────────────────
 def run_bot():
-    """Run Telegram bot in background thread"""
-    async def start_bot():
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    """Run Telegram bot - must handle its own event loop carefully in a thread"""
+    import nest_asyncio
 
-        application.add_handler(CommandHandler("start",    start))
-        application.add_handler(CommandHandler("list",     list_words))
-        application.add_handler(CommandHandler("practice", practice_all))
-        application.add_handler(CommandHandler("remove",   remove_word))
-        application.add_handler(CommandHandler("stats",    stats))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_word))
+    # Create a new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-        # Run scheduler in background thread
-        scheduler_thread = Thread(
-            target=schedule_daily_practice,
-            args=(application,),
-            daemon=True
-        )
-        scheduler_thread.start()
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-        print("🤖 Bot is running...")
-        await application.run_polling()
+    application.add_handler(CommandHandler("start",    start))
+    application.add_handler(CommandHandler("list",     list_words))
+    application.add_handler(CommandHandler("practice", practice_all))
+    application.add_handler(CommandHandler("remove",   remove_word))
+    application.add_handler(CommandHandler("stats",    stats))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_word))
 
-    asyncio.run(start_bot())
+    # Start scheduler thread
+    scheduler_thread = Thread(
+        target=schedule_daily_practice,
+        args=(application, loop),
+        daemon=True
+    )
+    scheduler_thread.start()
+
+    print("🤖 Bot is running...")
+
+    # Use updater directly to avoid signal handler issues in threads
+    async def start_polling():
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        print("✅ Polling started!")
+
+        # Keep running forever
+        while True:
+            await asyncio.sleep(1)
+
+    loop.run_until_complete(start_polling())
 
 
 def main():
-    # Start Telegram bot in background thread
-    bot_thread = Thread(target=run_bot, daemon=True)
-    bot_thread.start()
+    # Flask starts first in background thread
+    flask_thread = Thread(target=lambda: flask_app.run(
+        host='0.0.0.0',
+        port=PORT,
+        use_reloader=False  # Important: disable reloader in thread
+    ), daemon=True)
+    flask_thread.start()
+    print(f"🌐 Flask started on port {PORT}")
 
-    # Start self-ping thread to prevent sleeping
+    # Self-ping in background thread
     ping_thread = Thread(target=self_ping, daemon=True)
     ping_thread.start()
 
-    # Flask runs in main thread - Koyeb health checks pass immediately!
-    print(f"🌐 Starting web server on port {PORT}...")
-    flask_app.run(host='0.0.0.0', port=PORT)
+    # Bot runs in main thread (required for signal handling)
+    print("🤖 Starting Telegram bot in main thread...")
+    run_bot()
+
+
+if __name__ == '__main__':
+    main()
 
 
 if __name__ == '__main__':
